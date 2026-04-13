@@ -1,16 +1,17 @@
-// cors-config.js
 const cors = require('cors');
 
-// List of allowed origins (domains).
-// IMPORTANT: Add the final URL Railway gives you to this list!
+// List of allowed origins. 
+// It now checks for a CLIENT_URL environment variable you can set in Railway.
 const allowedOrigins = [
-  // Example: 'https://bingebox-omega-production.up.railway.app',
   'http://localhost:3000',
+  process.env.CLIENT_URL, 
 ];
 
 const corsOptions = {
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+    // Allow requests with no origin (like mobile apps or curl) 
+    // or if the origin is in our allowed list.
+    if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
       callback(new Error('This request was blocked by CORS.'));
