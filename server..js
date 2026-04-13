@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
-const securityMiddleware = require('./security-config'); // <-- Import security
-const corsMiddleware = require('./cors-config');         // <-- Import CORS
+const securityMiddleware = require('./security-config'); 
+const corsMiddleware = require('./cors-config');         
 const app = express();
 
 // Railway automatically assigns a PORT environment variable
@@ -18,7 +18,7 @@ app.use(corsMiddleware);
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Routes ---
-// A catch-all route to always serve the main HTML file.
+// A catch-all route to always serve the main HTML file from the public folder.
 app.get('*', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
