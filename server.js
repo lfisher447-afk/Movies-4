@@ -1,6 +1,6 @@
 'use strict';
 // ═══════════════════════════════════════════════════════════════
-//  BingeBox Omega — server.js  (Advanced Edition v10.0)
+//  BingeBox Omega — server.js  (Advanced Edition v10.1)
 // ═══════════════════════════════════════════════════════════════
 
 try { require('dotenv').config(); } catch (_) {}
@@ -41,36 +41,8 @@ app.set('trust proxy', 1);
 app.disable('x-powered-by');
 
 app.use((req, res, next) => {
-  res.setHeader('Connection', 'keep-alive');
-  next();
-});
-
-app.use((req, res, next) => {
   req.id = req.headers['x-request-id'] || crypto.randomUUID();
   res.setHeader('X-Request-ID', req.id);
-  next();
-});
-
-// ── Response timer fix ──────────────────────────────────────────
-app.use((req, res, next) => {
-  const t0 = process.hrtime.bigint();
-
-  // Primary method: intercept writeHead to guarantee header before sent
-  const _writeHead = res.writeHead;
-  res.writeHead = function(...args) {
-    const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-    this.setHeader('X-Response-Time', `${ms.toFixed(2)}ms`);
-    return _writeHead.apply(this, args);
-  };
-
-  // Fallback prefinish event hook
-  res.on('prefinish', () => {
-    if (!res.headersSent) {
-      const ms = Number(process.hrtime.bigint() - t0) / 1e6;
-      res.setHeader('X-Response-Time', `${ms.toFixed(2)}ms`);
-    }
-  });
-
   next();
 });
 
@@ -81,7 +53,6 @@ if (compression) {
     threshold: 1024,
     filter(req, res) {
       if (req.headers['x-no-compression']) return false;
-      // Guard: Ensure static compression.filter exists
       if (compression.filter) return compression.filter(req, res);
       return true;
     },
