@@ -4148,81 +4148,7 @@
          clearTimeout(t._timer);
          t._timer = setTimeout(() => t.classList.remove('show'), 3200);
       }
-/* ── PROFILES ────────────────────────────────────────────────── */
-      function renderProfiles() {
-         const grid = document.getElementById('profileGrid');
-         if (!grid) return;
-         
-         // 1. FIX: Ensure profiles array is never empty. If it is, restore default.
-         if (!Array.isArray(AppState.profiles) || AppState.profiles.length === 0) {
-            AppState.profiles =[{
-               id: 'p1',
-               name: 'Admin',
-               avatar: 'https://api.dicebear.com/9.x/avataaars/svg?seed=Admin&backgroundColor=b6e3f4',
-               isKids: false
-            }];
-            SafeStorage.set('bb_profiles', AppState.profiles);
-         }
-         
-         grid.innerHTML = AppState.profiles.map(p => `
-    <div class="profile-card" onclick="selectProfile('${p.id}')">
-      <div class="profile-avatar"><img src="${p.avatar}" alt="${esc(p.name)}" style="width:100%;height:100%;object-fit:cover;"/></div>
-      <div class="profile-name">${esc(p.name)}</div>
-    </div>`).join('');
-      }
 
-      function selectProfile(id) {
-         AppState.currentProfile = AppState.profiles.find(p => p.id === id);
-         
-         // Fallback just in case ID lookup fails
-         if (!AppState.currentProfile) {
-             AppState.currentProfile = AppState.profiles[0];
-         }
-         
-         const pv = document.getElementById('profilesView');
-         if (pv) pv.classList.add('hidden');
-         document.getElementById('navbar').style.display = '';
-         document.getElementById('genrePillsBar').style.display = '';
-         
-         // Update nav avatar
-         const img = document.getElementById('navAvatarImg');
-         const dImg = document.getElementById('dropAvatarImg');
-         const nameEl = document.getElementById('dropProfileName');
-         
-         if (img) img.innerHTML = `<img src="${AppState.currentProfile.avatar}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;"/>`;
-         if (dImg) dImg.innerHTML = `<img src="${AppState.currentProfile.avatar}" style="width:100%;height:100%;object-fit:cover;border-radius:50%;"/>`;
-         if (nameEl) nameEl.textContent = AppState.currentProfile.name;
-         
-         showToast(`Welcome, ${AppState.currentProfile.name}!`, 'success');
-      }
-
-      function showProfilesView() {
-         const pv = document.getElementById('profilesView');
-         if (pv) {
-            pv.classList.remove('hidden');
-            renderProfiles();
-         }
-      }
-
-      // 2. FIX: Actually allow adding a new profile instead of a disabled toast msg
-      function openAddProfileToast() {
-         const newName = prompt("Enter a name for the new profile:");
-         if (!newName || !newName.trim()) return;
-         
-         const newId = 'p' + Date.now(); // Unique ID
-         const randomColor = Math.floor(Math.random()*16777215).toString(16); // Random bg color
-         
-         AppState.profiles.push({
-            id: newId,
-            name: newName.trim(),
-            avatar: `https://api.dicebear.com/9.x/avataaars/svg?seed=${encodeURIComponent(newName)}&backgroundColor=${randomColor}`,
-            isKids: false
-         });
-         
-         SafeStorage.set('bb_profiles', AppState.profiles);
-         renderProfiles();
-         showToast(`Profile "${newName}" added successfully!`, 'success');
-      }
       /* ── NAVBAR ──────────────────────────────────────────────────── */
       const Navbar = (() => {
          let _scrolled = false;
@@ -5541,6 +5467,95 @@ function closeDetailModal() {
                 if (l) l.classList.add('hidden');
             };
             setTimeout(hideLoader, 1500);
+
+            try {
+                // 2. Profile screen setup
+                renderProfiles();
+                document.getElementById('navbar').style.display = 'none';
+                document.getElementById('genrePillsBar').style.display = 'none';
+
+                // 3. Load genre map with error protection
+                const genreData = await Promise.all([
+                    TMDB.fetch('/genre/movie/list'), 
+                    TMDB.fetch('/genre/tv/list')
+                ]).catch(() => [null, null]);
+
+                if (genreData[0] || genreData[1]) {
+                    [...(genreData[0]?.genres || []), ...(genreData[1]?.genres || [])].forEach(g => {
+                        GENRE_MAP[g.id] = g.name;
+                    });
+                    buildGenrePills();
+                }
+
+                // 4. Initialize everything else
+                Hero.load();
+                Rows.buildAll();
+                refreshWishlistUI();
+                refreshHistoryUI();
+                renderHomeHistory();
+                setupInfiniteScroll();
+                setupKeyboard();
+                setupShakeToShuffle();
+                setVhVar();
+                window.addEventListener('resize', setVhVar, { passive: true });
+                Navbar.init();
+                
+                if (AppState.settings.showFPS) initFPSCounter();
+
+            } catch (err) {
+                console.error('BingeBox Init Error:', err);
+            } finally {
+                // 5. Final attempt to hide loader
+                hideLoader();
+            }
+        }
+      // Expose globals for inline HTML handlers
+      window.openDetailModal = openDetailModal;
+      window.closeDetailModal = closeDetailModal;
+      window.startPlaying = startPlaying;
+      window.switchServer = switchServer;
+      window.loadEpisodes = loadEpisodes;
+      window.playEpisode = playEpisode;
+      window.popOutPlayer = popOutPlayer;
+      window.goFullscreen = goFullscreen;
+      window.openDownloadModal = openDownloadModal;
+      window.closeDownloadModal = closeDownloadModal;
+      window.toggleWishlist = toggleWishlist;
+      window.toggleWishlistPanel = toggleWishlistPanel;
+      window.openWishlistPanel = openWishlistPanel;
+      window.closeWishlistPanel = closeWishlistPanel;
+      window.switchPanelTab = switchPanelTab;
+      window.showCategory = showCategory;
+      window.filterByGenre = filterByGenre;
+      window.goHome = goHome;
+      window.loadMore = loadMore;
+      window.toggleInfiniteScroll = toggleInfiniteScroll;
+      window.shareMedia = shareMedia;
+      window.searchByCast = searchByCast;
+      window.showToast = showToast;
+      window.updateActiveNav = updateActiveNav;
+      window.showContextMenu = showContextMenu;
+      window.openSettings = openSettings;
+      window.closeSettings = closeSettings;
+      window.switchSettingsTab = switchSettingsTab;
+      window.toggleSetting = toggleSetting;
+      window.applyTheme = applyTheme;
+      window.saveSettings = saveSettings;
+      window.exportData = exportData;
+      window.importData = importData;
+      window.clearAllData = clearAllData;
+      window.startVoiceSearch = startVoiceSearch;
+      window.activateKonami = activateKonami;
+      window.scrollToHistory = scrollToHistory;
+         window.Navbar = Navbar;
+         
+         // Start the app engine!
+         init();
+         
+      </script>
+   </body>
+</html>
+           setTimeout(hideLoader, 1500);
 
             try {
                 // 2. Profile screen setup
