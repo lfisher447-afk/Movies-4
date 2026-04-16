@@ -1,18 +1,7 @@
+--- START OF FILE cache-manager.js ---
 'use strict';
 // ═══════════════════════════════════════════════════════════════
 //  BingeBox Omega — cache-manager.js  (NEW — Advanced v10.0)
-// ═══════════════════════════════════════════════════════════════
-//  A production-grade multi-tier caching system:
-//    • L1 LRU hot cache (small, fast, frequent hits)
-//    • L2 LRU warm cache (large, longer TTL, fallback)
-//    • Adaptive TTL — extends on repeated hits, shrinks on errors
-//    • Tag-based invalidation (e.g. invalidate all 'movie' entries)
-//    • Prefetch queue — pre-warms popular endpoints
-//    • Cache-aside pattern with stale-while-revalidate
-//    • Compression for large values (>4KB)
-//    • Memory pressure guard — evicts when RSS exceeds threshold
-//    • Prometheus-style metrics (hit rate, evictions, etc.)
-//    • Express router for /api/v1/cache/* management
 // ═══════════════════════════════════════════════════════════════
 
 const zlib    = require('zlib');
@@ -23,14 +12,14 @@ const express = require('express');
 const CFG = {
   L1_MAX:        300,
   L2_MAX:        2000,
-  DEFAULT_TTL:   5   * 60 * 1000,    // 5 min
-  MAX_TTL:       60  * 60 * 1000,    // 1 hour cap
-  MIN_TTL:       30  * 1000,         // 30 sec floor
-  COMPRESS_AT:   4096,               // bytes — compress values larger than this
-  MEM_THRESHOLD: 0.85,               // RSS / totalMem ratio that triggers eviction
+  DEFAULT_TTL:   5   * 60 * 1000,
+  MAX_TTL:       60  * 60 * 1000,
+  MIN_TTL:       30  * 1000,
+  COMPRESS_AT:   4096,               
+  MEM_THRESHOLD: 0.85,               
   PREFETCH_CONCURRENCY: 3,
-  SWR_WINDOW:    30  * 1000,         // stale-while-revalidate window
-  METRICS_RESET: 60  * 60 * 1000,   // reset metrics hourly
+  SWR_WINDOW:    30  * 1000,         
+  METRICS_RESET: 60  * 60 * 1000,   
 };
 
 // ── Metrics ──────────────────────────────────────────────────────
@@ -61,7 +50,7 @@ function compress(str) {
 }
 
 function decompress(entry) {
-  if (!entry.compressed) return entry.data;
+  if (entry.compressed !== true) return entry.data;
   const str = zlib.gunzipSync(entry.data).toString('utf8');
   metrics.decompressions++;
   return str;
@@ -87,16 +76,11 @@ class LRUTieredCache {
     metrics.evictions++;
   }
 
-  /**
-   * @param {string} key
-   * @returns {null | { value: any, stale: boolean, ttl: number }}
-   */
   get(key) {
     if (!this._map.has(key)) return null;
     const entry = this._map.get(key);
     const now   = Date.now();
 
-    // Move to end (LRU)
     this._map.delete(key);
     this._map.set(key, entry);
 
@@ -105,21 +89,15 @@ class LRUTieredCache {
 
     if (expired && !entry.allowStale) return null;
 
-    // Decompress if needed
-    const value = typeof entry.data === 'object' && entry.compressed !== undefined
+    // Fixed correct decompress logic parsing
+    const value = entry.compressed === true
       ? JSON.parse(decompress(entry))
-      : entry.data;
+      : JSON.parse(entry.data);
 
     return { value, stale: expired || stale, ttl: Math.max(0, entry.expires - now) };
   }
 
-  /**
-   * @param {string} key
-   * @param {*} value
-   * @param {number} ttl
-   * @param {string[]} tags
-   */
-  set(key, value, ttl, tags = []) {
+  set(key, value, ttl, tags =[]) {
     if (this._map.size >= this._max) this._evictOldest();
 
     const serialized = JSON.stringify(value);
@@ -149,23 +127,13 @@ class LRUTieredCache {
   }
 
   clear() { const s = this._map.size; this._map.clear(); return s; }
-
   get size() { return this._map.size; }
-
   keys() { return [...this._map.keys()]; }
-
   info() {
-    return {
-      name:      this._name,
-      size:      this._map.size,
-      maxSize:   this._max,
-      evictions: this.evictions,
-      utilization: this._map.size / this._max,
-    };
+    return { name: this._name, size: this._map.size, maxSize: this._max, evictions: this.evictions, utilization: this._map.size / this._max };
   }
 }
 
-// ── Instances ────────────────────────────────────────────────────
 const L1 = new LRUTieredCache(CFG.L1_MAX,  'L1-Hot');
 const L2 = new LRUTieredCache(CFG.L2_MAX,  'L2-Warm');
 
@@ -173,13 +141,12 @@ const L2 = new LRUTieredCache(CFG.L2_MAX,  'L2-Warm');
 //  Adaptive TTL engine
 // ═══════════════════════════════════════════════════════════════
 
-const hitCounters = new Map(); // key → consecutive hit count
+const hitCounters = new Map();
+setInterval(() => hitCounters.clear(), 60 * 60 * 1000); // Fixed endless memory growth
 
 function getAdaptiveTTL(key, baseTTL) {
   const hits = hitCounters.get(key) || 0;
   hitCounters.set(key, hits + 1);
-
-  // Exponential TTL growth for hot keys (cap at MAX_TTL)
   const adapted = Math.min(baseTTL * Math.pow(1.3, Math.min(hits, 8)), CFG.MAX_TTL);
   return Math.max(CFG.MIN_TTL, adapted);
 }
@@ -188,10 +155,6 @@ function getAdaptiveTTL(key, baseTTL) {
 //  Public API
 // ═══════════════════════════════════════════════════════════════
 
-/**
- * Get a value from the cache.
- * Returns { value, stale, source } or null.
- */
 function get(key) {
   const l1 = L1.get(key);
   if (l1) {
@@ -204,75 +167,60 @@ function get(key) {
   if (l2) {
     metrics.hits++;
     if (l2.stale) metrics.staleHits++;
-    // Promote to L1
-    L1.set(key, l2.value, Math.min(l2.ttl, CFG.DEFAULT_TTL), []);
+    L1.set(key, l2.value, Math.min(l2.ttl, CFG.DEFAULT_TTL),[]);
     return { ...l2, source: 'L2' };
   }
-
   metrics.misses++;
   return null;
 }
 
-/**
- * Set a value in both L1 and L2 with adaptive TTL.
- * @param {string}   key
- * @param {*}        value
- * @param {number}   baseTTL   milliseconds
- * @param {string[]} tags      invalidation tags
- */
-function set(key, value, baseTTL = CFG.DEFAULT_TTL, tags = []) {
+function set(key, value, baseTTL = CFG.DEFAULT_TTL, tags =[]) {
   const ttl = getAdaptiveTTL(key, baseTTL);
   L1.set(key, value, Math.min(ttl, CFG.DEFAULT_TTL * 2), tags);
   L2.set(key, value, ttl, tags);
 }
 
-/**
- * Delete from both tiers.
- */
-function del(key) {
-  L1.delete(key);
-  L2.delete(key);
-}
+function del(key) { L1.delete(key); L2.delete(key); }
+function invalidate(tag) { return L1.invalidateByTag(tag) + L2.invalidateByTag(tag); }
 
-/**
- * Invalidate all entries matching a tag.
- */
-function invalidate(tag) {
-  const n = L1.invalidateByTag(tag) + L2.invalidateByTag(tag);
-  return n;
-}
+// Deduplication unified queue for SWR & Misses
+const inFlight = new Map();
 
-/**
- * Stale-while-revalidate wrapper.
- * If the cached value is stale, returns it immediately AND fires an async refresh.
- */
-async function getOrFetch(key, fetcher, ttl = CFG.DEFAULT_TTL, tags = []) {
+async function getOrFetch(key, fetcher, ttl = CFG.DEFAULT_TTL, tags =[]) {
   const cached = get(key);
 
   if (cached && !cached.stale) return cached.value;
 
   if (cached && cached.stale) {
-    // Return stale immediately, refresh in background
-    setImmediate(async () => {
-      try {
-        const fresh = await fetcher();
+    if (!inFlight.has(key)) {
+      const promise = fetcher().then(fresh => {
         set(key, fresh, ttl, tags);
-      } catch (err) {
+        inFlight.delete(key);
+        return fresh;
+      }).catch(err => {
         metrics.errors++;
-      }
-    });
+        inFlight.delete(key);
+      });
+      inFlight.set(key, promise);
+    }
     return cached.value;
   }
 
-  // Cache miss — fetch and store
-  try {
-    const value = await fetcher();
-    set(key, value, ttl, tags);
-    return value;
-  } catch (err) {
+  // Cache miss 
+  if (inFlight.has(key)) return inFlight.get(key);
+
+  const promise = fetcher().then(fresh => {
+    set(key, fresh, ttl, tags);
+    inFlight.delete(key);
+    return fresh;
+  }).catch(err => {
     metrics.errors++;
+    inFlight.delete(key);
     throw err;
-  }
+  });
+
+  inFlight.set(key, promise);
+  return promise;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -285,7 +233,6 @@ function checkMemoryPressure() {
   const ratio = rss / total;
 
   if (ratio > CFG.MEM_THRESHOLD) {
-    // Evict 20% of L2
     const evictCount = Math.ceil(L2.size * 0.2);
     const keys = L2.keys().slice(0, evictCount);
     keys.forEach(k => L2.delete(k));
@@ -302,7 +249,7 @@ setInterval(checkMemoryPressure, 30 * 1000);
 //  Prefetch queue
 // ═══════════════════════════════════════════════════════════════
 
-const prefetchQueue = [];
+const prefetchQueue =[];
 let prefetching = 0;
 
 function enqueuePrefetch(key, fetcher, ttl, tags) {
@@ -338,6 +285,7 @@ router.get('/stats', (req, res) => {
     metrics:    metrics.snapshot(),
     l1:         L1.info(),
     l2:         L2.info(),
+    inFlight:   inFlight.size,
     prefetch:   { queued: prefetchQueue.length, active: prefetching },
     memory: {
       rss:   `${(process.memoryUsage().rss / 1024 / 1024).toFixed(1)}MB`,
@@ -369,20 +317,8 @@ router.get('/keys', (req, res) => {
   res.json({ l1: L1.keys().slice(0, limit), l2: L2.keys().slice(0, limit) });
 });
 
-// ═══════════════════════════════════════════════════════════════
-//  Exports
-// ═══════════════════════════════════════════════════════════════
-
 module.exports = {
-  get,
-  set,
-  del,
-  invalidate,
-  getOrFetch,
-  enqueuePrefetch,
-  metrics,
-  L1,
-  L2,
-  router,
-  CFG,
+  get, set, del, invalidate, getOrFetch, enqueuePrefetch,
+  metrics, L1, L2, router, CFG,
 };
+--- END OF FILE cache-manager.js ---
