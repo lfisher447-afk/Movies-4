@@ -245,20 +245,81 @@ const SafeStorage = {
    }
 };
 
-
 /* ── CONFIG ────────────────────────────────────────────────────────────────── */
 const CONFIG = {
-   TMDB_KEY: SafeStorage.get('bb_tmdb_key', '15d2ea6d0dc1d476efbca3eba2b9bbfb'),
-   TMDB_BASE: 'https://api.themoviedb.org/3',
+   TMDB_BASE: '/api/v1/tmdb', // Points to the server.js proxy
    IMG_BASE: 'https://image.tmdb.org/t/p',
    IMG_W500: 'https://image.tmdb.org/t/p/w500',
    IMG_W1280: 'https://image.tmdb.org/t/p/w1280',
    IMG_ORIG: 'https://image.tmdb.org/t/p/original',
-   CACHE_TTL: 5 * 60 * 1000,        // 5 min standard
-   CACHE_TTL_LONG: 60 * 60 * 1000,  // 1 hr for genre/static
+   CACHE_TTL: 5 * 60 * 1000,        
+   CACHE_TTL_LONG: 60 * 60 * 1000,  
    MAX_CONCURRENT: 6,
    MAX_RETRIES: 3,
 };
+
+/* ── TMDB API v2 — Dedup, TTL cache, retry, request queue ──────────────────── */
+const TMDB = (() => {
+   const cache = AppState.cache;
+   const inflight = AppState.inflightRequests;
+
+   async function _raw(url, retries = CONFIG.MAX_RETRIES) {
+      for (let attempt = 0; attempt < retries; attempt++) {
+         try {
+            const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
+            if (res.status === 429) {
+               const retry = parseInt(res.headers.get('Retry-After') || 2);
+               await new Promise(r => setTimeout(r, retry * 1000 * (attempt + 1)));
+               continue;
+            }
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            return await res.json();
+         } catch (err) {
+            if (attempt === retries - 1) throw err;
+            await new Promise(r => setTimeout(r, Math.pow(2, attempt) * 500));
+         }
+      }
+   }
+
+   return {
+      async fetch(path, params = {}, ttl = CONFIG.CACHE_TTL) {
+         // Appends language param without the raw API key
+         const q = new URLSearchParams({ language: AppState.settings.language || 'en-US', ...params }).toString();
+         const cleanPath = '/' + path.replace(/^\/+/, '');
+         const url = `${CONFIG.TMDB_BASE}${cleanPath}?${q}`;
+
+         if (cache.has(url)) {
+            const entry = cache.get(url);
+            if (Date.now() - entry.ts < ttl) return entry.data;
+            cache.delete(url);
+         }
+
+         if (inflight.has(url)) return inflight.get(url);
+
+         const req = _raw(url)
+            .then(data => {
+               if (data) cache.set(url, { data, ts: Date.now() });
+               inflight.delete(url);
+               return data;
+            })
+            .catch(err => {
+               inflight.delete(url);
+               console.warn(`[TMDB] Failed: ${path}`, err.message);
+               return null;
+            });
+
+         inflight.set(url, req);
+         return req;
+      },
+
+      async fetchMulti(paths, params = {}) {
+         return Promise.all(paths.map(p => this.fetch(p, params)));
+      },
+
+      clearCache() { cache.clear(); },
+   };
+})();
+
 
 /* ── APP STATE ─────────────────────────────────────────────────────────────── */
 const AppState = {
