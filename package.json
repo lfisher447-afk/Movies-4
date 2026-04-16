@@ -1,4 +1,3 @@
---- START OF FILE package.json ---
 {
   "name": "bingebox-omega-server",
   "version": "10.0.0",
@@ -105,4 +104,3 @@
     "delay": "500"
   }
 }
---- END OF FILE package.json ---
