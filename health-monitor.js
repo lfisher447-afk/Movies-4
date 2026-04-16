@@ -1,7 +1,6 @@
---- START OF FILE health-monitor.js ---
 'use strict';
 // ═══════════════════════════════════════════════════════════════
-//  BingeBox Omega — health-monitor.js  (NEW — Advanced v10.0)
+//  BingeBox Omega — health-monitor.js  (NEW — Advanced v10.1)
 // ═══════════════════════════════════════════════════════════════
 
 const os      = require('os');
@@ -12,14 +11,12 @@ const express = require('express');
 
 const router  = express.Router();
 
-// ── Constants ────────────────────────────────────────────────────
 const BOOT_TIME   = Date.now();
 const VERSION     = (() => { try { return require('./package.json').version; } catch (_) { return '10.0.0'; } })();
-const PUBLIC_DIR  = path.join(__dirname, 'public'); // Fixed shell vs context working dir issue
+const PUBLIC_DIR  = path.join(__dirname, 'public'); 
 const TMDB_PROBE  = 'https://api.themoviedb.org/3/configuration';
 const TMDB_KEY    = process.env.TMDB_API_KEY || '15d2ea6d0dc1d476efbca3eba2b9bbfb';
 
-// Thresholds
 const THRESHOLDS = {
   CPU_WARN:      70,    
   CPU_CRIT:      90,
@@ -32,7 +29,6 @@ const THRESHOLDS = {
   PROBE_TIMEOUT: 5000,  
 };
 
-// ── State ────────────────────────────────────────────────────────
 const state = {
   cpu:       { current: 0, avg5s: 0, samples:[] },
   memory:    { used: 0, total: os.totalmem(), pct: 0, trend: 'stable' },
@@ -44,12 +40,12 @@ const state = {
 };
 
 let overallStatus = 'ok';
-
-// ── Samplers ──────────────────────────────────────────────────
-let lastCpuSample = os.cpus();
+let lastCpuSample = os.cpus() || [];
 
 function sampleCPU() {
-  const cpus    = os.cpus();
+  const cpus = os.cpus();
+  if (!cpus || cpus.length === 0) return; // Prevent crashes in restricted containers
+  
   const deltas  = cpus.map((cpu, i) => {
     const prev = lastCpuSample[i] || cpu;
     const idle  = cpu.times.idle  - (prev.times.idle  || 0);
@@ -137,7 +133,6 @@ function registerCheck(name, fn, intervalMs = 30000) {
   setInterval(runCheck, intervalMs);
 }
 
-// ── Built-in checks ──────────────────────────────────────────────
 registerCheck('tmdb-api', () => new Promise((resolve, reject) => {
   const url = `${TMDB_PROBE}?api_key=${TMDB_KEY}`;
   const req = https.get(url, { timeout: THRESHOLDS.PROBE_TIMEOUT }, res => {
@@ -145,7 +140,7 @@ registerCheck('tmdb-api', () => new Promise((resolve, reject) => {
     res.resume();
   });
   req.on('error', reject);
-  req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
+  req.on('timeout', () => { req.destroy(new Error('Timeout')); });
 }), 60000);
 
 registerCheck('static-files', async () => {
@@ -191,10 +186,6 @@ function calcOverallStatus() {
 
 setInterval(() => { sampleCPU(); sampleMemory(); sampleHeap(); measureEventLoopLag(); }, 1000);
 
-// ═══════════════════════════════════════════════════════════════
-//  Express routes
-// ═══════════════════════════════════════════════════════════════
-
 function buildReport() {
   const uptimeMs  = Date.now() - BOOT_TIME;
   const slaUptime = uptimeMs > 0 ? ((1 - state.sla.downtimeMs / uptimeMs) * 100).toFixed(3) : '100.000';
@@ -205,7 +196,7 @@ function buildReport() {
     uptime: { ms: uptimeMs, human: formatUptime(uptimeMs) },
     sla: { uptime: `${slaUptime}%`, downtimeMs: state.sla.downtimeMs },
     ts: new Date().toISOString(),
-    cpu: { current: `${state.cpu.current}%`, avg5s: `${state.cpu.avg5s}%`, warn: state.cpu.avg5s > THRESHOLDS.CPU_WARN, cores: os.cpus().length, load: os.loadavg().map(l => l.toFixed(2)) },
+    cpu: { current: `${state.cpu.current}%`, avg5s: `${state.cpu.avg5s}%`, warn: state.cpu.avg5s > THRESHOLDS.CPU_WARN, cores: (os.cpus()||[]).length, load: os.loadavg().map(l => l.toFixed(2)) },
     memory: state.memory, heap: state.heap, eventLoop: state.eventLoop,
     node: { version: process.version, pid: process.pid, platform: os.platform(), arch: os.arch(), hostname: os.hostname() },
     checks: checksObj, incidents: state.incidents.slice(-10), thresholds: THRESHOLDS,
@@ -252,4 +243,3 @@ module.exports.buildReport = buildReport;
 module.exports.calcOverallStatus = calcOverallStatus;
 module.exports.registerCheck = registerCheck;
 module.exports.state = state;
---- END OF FILE health-monitor.js ---
