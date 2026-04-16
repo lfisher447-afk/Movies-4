@@ -1,7 +1,6 @@
---- START OF FILE cache-manager.js ---
 'use strict';
 // ═══════════════════════════════════════════════════════════════
-//  BingeBox Omega — cache-manager.js  (NEW — Advanced v10.0)
+//  BingeBox Omega — cache-manager.js  (NEW — Advanced v10.1)
 // ═══════════════════════════════════════════════════════════════
 
 const zlib    = require('zlib');
@@ -41,7 +40,6 @@ const metrics = {
 };
 setInterval(() => metrics.reset(), CFG.METRICS_RESET);
 
-// ── Compression helpers ──────────────────────────────────────────
 function compress(str) {
   if (str.length < CFG.COMPRESS_AT) return { data: str, compressed: false };
   const buf = zlib.gzipSync(Buffer.from(str, 'utf8'));
@@ -55,10 +53,6 @@ function decompress(entry) {
   metrics.decompressions++;
   return str;
 }
-
-// ═══════════════════════════════════════════════════════════════
-//  LRU Cache Class
-// ═══════════════════════════════════════════════════════════════
 
 class LRUTieredCache {
   constructor(maxSize, name) {
@@ -89,12 +83,14 @@ class LRUTieredCache {
 
     if (expired && !entry.allowStale) return null;
 
-    // Fixed correct decompress logic parsing
-    const value = entry.compressed === true
-      ? JSON.parse(decompress(entry))
-      : JSON.parse(entry.data);
-
-    return { value, stale: expired || stale, ttl: Math.max(0, entry.expires - now) };
+    try {
+        const value = entry.compressed === true
+        ? JSON.parse(decompress(entry))
+        : JSON.parse(entry.data);
+        return { value, stale: expired || stale, ttl: Math.max(0, entry.expires - now) };
+    } catch(e) {
+        return null;
+    }
   }
 
   set(key, value, ttl, tags =[]) {
@@ -137,12 +133,8 @@ class LRUTieredCache {
 const L1 = new LRUTieredCache(CFG.L1_MAX,  'L1-Hot');
 const L2 = new LRUTieredCache(CFG.L2_MAX,  'L2-Warm');
 
-// ═══════════════════════════════════════════════════════════════
-//  Adaptive TTL engine
-// ═══════════════════════════════════════════════════════════════
-
 const hitCounters = new Map();
-setInterval(() => hitCounters.clear(), 60 * 60 * 1000); // Fixed endless memory growth
+setInterval(() => hitCounters.clear(), 60 * 60 * 1000); 
 
 function getAdaptiveTTL(key, baseTTL) {
   const hits = hitCounters.get(key) || 0;
@@ -150,10 +142,6 @@ function getAdaptiveTTL(key, baseTTL) {
   const adapted = Math.min(baseTTL * Math.pow(1.3, Math.min(hits, 8)), CFG.MAX_TTL);
   return Math.max(CFG.MIN_TTL, adapted);
 }
-
-// ═══════════════════════════════════════════════════════════════
-//  Public API
-// ═══════════════════════════════════════════════════════════════
 
 function get(key) {
   const l1 = L1.get(key);
@@ -183,7 +171,6 @@ function set(key, value, baseTTL = CFG.DEFAULT_TTL, tags =[]) {
 function del(key) { L1.delete(key); L2.delete(key); }
 function invalidate(tag) { return L1.invalidateByTag(tag) + L2.invalidateByTag(tag); }
 
-// Deduplication unified queue for SWR & Misses
 const inFlight = new Map();
 
 async function getOrFetch(key, fetcher, ttl = CFG.DEFAULT_TTL, tags =[]) {
@@ -206,7 +193,6 @@ async function getOrFetch(key, fetcher, ttl = CFG.DEFAULT_TTL, tags =[]) {
     return cached.value;
   }
 
-  // Cache miss 
   if (inFlight.has(key)) return inFlight.get(key);
 
   const promise = fetcher().then(fresh => {
@@ -223,10 +209,6 @@ async function getOrFetch(key, fetcher, ttl = CFG.DEFAULT_TTL, tags =[]) {
   return promise;
 }
 
-// ═══════════════════════════════════════════════════════════════
-//  Memory pressure guard
-// ═══════════════════════════════════════════════════════════════
-
 function checkMemoryPressure() {
   const rss   = process.memoryUsage().rss;
   const total = os.totalmem();
@@ -236,18 +218,9 @@ function checkMemoryPressure() {
     const evictCount = Math.ceil(L2.size * 0.2);
     const keys = L2.keys().slice(0, evictCount);
     keys.forEach(k => L2.delete(k));
-
-    const log = (() => { try { return require('./logger').root; } catch (_) { return console; } })();
-    const warn = log.warn || log.log;
-    if (warn) warn.call(log, `Memory pressure (${(ratio*100).toFixed(0)}%) — evicted ${evictCount} L2 entries`);
-    metrics.evictions += evictCount;
   }
 }
 setInterval(checkMemoryPressure, 30 * 1000);
-
-// ═══════════════════════════════════════════════════════════════
-//  Prefetch queue
-// ═══════════════════════════════════════════════════════════════
 
 const prefetchQueue =[];
 let prefetching = 0;
@@ -273,10 +246,6 @@ async function drainPrefetch() {
     drainPrefetch();
   }
 }
-
-// ═══════════════════════════════════════════════════════════════
-//  Express management router
-// ═══════════════════════════════════════════════════════════════
 
 const router = express.Router();
 
@@ -321,4 +290,3 @@ module.exports = {
   get, set, del, invalidate, getOrFetch, enqueuePrefetch,
   metrics, L1, L2, router, CFG,
 };
---- END OF FILE cache-manager.js ---
